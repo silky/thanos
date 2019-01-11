@@ -124,6 +124,7 @@ func (p *Prometheus) Start() error {
 		"--storage.tsdb.path="+p.db.Dir(),
 		"--web.listen-address="+p.addr,
 		"--web.route-prefix="+p.prefix,
+		"--web.enable-admin-api",
 		"--config.file="+filepath.Join(p.db.Dir(), "prometheus.yml"),
 	)
 	go func() {
@@ -137,12 +138,17 @@ func (p *Prometheus) Start() error {
 	return nil
 }
 
-// Addr gets correct address after Start method.
+// Dir returns TSDB dir.
+func (p *Prometheus) Dir() string {
+	return p.dir
+}
+
+// Addr returns correct address after Start method.
 func (p *Prometheus) Addr() string {
 	return p.addr + p.prefix
 }
 
-// SetConfig updates the contents of the config file.
+// SetConfig updates the contents of the config file. By default it is empty.
 func (p *Prometheus) SetConfig(s string) (err error) {
 	f, err := os.Create(filepath.Join(p.dir, "prometheus.yml"))
 	if err != nil {
@@ -157,7 +163,7 @@ func (p *Prometheus) SetConfig(s string) (err error) {
 // Stop terminates Prometheus and clean up its data directory.
 func (p *Prometheus) Stop() error {
 	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		return errors.Wrapf(err, "failed to Prometheus. Kill it manually and cleanr %s dir", p.db.Dir())
+		return errors.Wrapf(err, "failed to Prometheus. Kill it manually and clean %s dir", p.db.Dir())
 	}
 
 	time.Sleep(time.Second / 2)
@@ -187,6 +193,30 @@ func CreateBlock(
 	mint, maxt int64,
 	extLset labels.Labels,
 	resolution int64,
+) (id ulid.ULID, err error) {
+	return createBlock(dir, series, numSamples, mint, maxt, extLset, resolution, false)
+}
+
+// CreateBlockWithTombstone is same as CreateBlock but leaves tombstones which mimics the Prometheus local block.
+func CreateBlockWithTombstone(
+	dir string,
+	series []labels.Labels,
+	numSamples int,
+	mint, maxt int64,
+	extLset labels.Labels,
+	resolution int64,
+) (id ulid.ULID, err error) {
+	return createBlock(dir, series, numSamples, mint, maxt, extLset, resolution, true)
+}
+
+func createBlock(
+	dir string,
+	series []labels.Labels,
+	numSamples int,
+	mint, maxt int64,
+	extLset labels.Labels,
+	resolution int64,
+	tombstones bool,
 ) (id ulid.ULID, err error) {
 	h, err := tsdb.NewHead(nil, nil, tsdb.NopWAL(), 10000000000)
 	if err != nil {
@@ -251,8 +281,10 @@ func CreateBlock(
 		return id, errors.Wrap(err, "finalize block")
 	}
 
-	if err = os.Remove(filepath.Join(dir, id.String(), "tombstones")); err != nil {
-		return id, errors.Wrap(err, "remove tombstones")
+	if !tombstones {
+		if err = os.Remove(filepath.Join(dir, id.String(), "tombstones")); err != nil {
+			return id, errors.Wrap(err, "remove tombstones")
+		}
 	}
 
 	return id, nil
