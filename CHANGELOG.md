@@ -27,6 +27,13 @@ We use *breaking* word for marking changes that are not backward compatible (rel
 - S3 provider:
   - Added `put_user_metadata` option to config.
   
+### Deprecated
+  
+- Tests against Prometheus below v2.2.1. This does not mean *lack* of support for those. Only that we don't tests the compatibility anymore. Reasons:
+  - TSDB we import uses new index version. Obviously versions before v2.2.1 are not forward compatible.
+  - Flags endpoint does not exists before v2.2.1. Our tests requires this and soon we will require it from sidecar itself.
+   
+  
 ## [v0.2.1](https://github.com/improbable-eng/thanos/releases/tag/v0.2.1) - 2018.12.27
 
 ### Added

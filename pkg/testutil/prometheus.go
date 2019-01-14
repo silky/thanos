@@ -9,8 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
+	"testing"
 	"time"
+
+	"github.com/prometheus/tsdb/testutil"
 
 	"github.com/go-kit/kit/log"
 	"github.com/improbable-eng/thanos/pkg/block"
@@ -27,17 +31,18 @@ const (
 	defaultAlertmanagerVersion = "v0.15.2"
 	defaultMinioVersion        = "RELEASE.2018-10-06T00-15-16Z"
 
-	promBinEnvVar         = "THANOS_TEST_PROMETHEUS_PATH"
+	// Space delimited list of versions.
+	promVersionsEnvVar    = "THANOS_TEST_PROMETHEUS_VERSIONS"
 	alertmanagerBinEnvVar = "THANOS_TEST_ALERTMANAGER_PATH"
 	minioBinEnvVar        = "THANOS_TEST_MINIO_PATH"
 )
 
 func PrometheusBinary() string {
-	b := os.Getenv(promBinEnvVar)
-	if b == "" {
-		return fmt.Sprintf("prometheus-%s", defaultPrometheusVersion)
-	}
-	return b
+	return prometheusBin(defaultPrometheusVersion)
+}
+
+func prometheusBin(version string) string {
+	return fmt.Sprintf("prometheus-%s", version)
 }
 
 func AlertmanagerBinary() string {
@@ -59,9 +64,10 @@ func MinioBinary() string {
 // Prometheus represents a test instance for integration testing.
 // It can be populated with data before being started.
 type Prometheus struct {
-	dir    string
-	db     *tsdb.DB
-	prefix string
+	dir     string
+	db      *tsdb.DB
+	prefix  string
+	version string
 
 	running bool
 	cmd     *exec.Cmd
@@ -79,13 +85,40 @@ func NewTSDB() (*tsdb.DB, error) {
 	})
 }
 
+func ForeachPrometheus(t *testing.T, testFn func(t testing.TB, p *Prometheus)) {
+	vers := os.Getenv(promVersionsEnvVar)
+	if vers == "" {
+		vers = defaultPrometheusVersion
+	}
+
+	for _, ver := range strings.Split(vers, " ") {
+		if ok := t.Run(ver, func(t *testing.T) {
+			p, err := newPrometheus(ver, "")
+			testutil.Ok(t, err)
+
+			testFn(t, p)
+		}); !ok {
+			return
+		}
+	}
+}
+
 // NewPrometheus creates a new test Prometheus instance that will listen on local address.
+// DEPRECARED: Use ForeachPrometheus instead.
 func NewPrometheus() (*Prometheus, error) {
-	return NewPrometheusOnPath("")
+	return newPrometheus("", "")
 }
 
 // NewPrometheus creates a new test Prometheus instance that will listen on local address and given prefix path.
 func NewPrometheusOnPath(prefix string) (*Prometheus, error) {
+	return newPrometheus("", prefix)
+}
+
+func newPrometheus(version string, prefix string) (*Prometheus, error) {
+	if version == "" {
+		version = defaultPrometheusVersion
+	}
+
 	db, err := NewTSDB()
 	if err != nil {
 		return nil, err
@@ -98,10 +131,11 @@ func NewPrometheusOnPath(prefix string) (*Prometheus, error) {
 	}
 
 	return &Prometheus{
-		dir:    db.Dir(),
-		db:     db,
-		prefix: prefix,
-		addr:   "<prometheus-not-started>",
+		dir:     db.Dir(),
+		db:      db,
+		prefix:  prefix,
+		version: version,
+		addr:    "<prometheus-not-started>",
 	}, nil
 }
 
@@ -120,7 +154,7 @@ func (p *Prometheus) Start() error {
 
 	p.addr = fmt.Sprintf("localhost:%d", port)
 	p.cmd = exec.Command(
-		PrometheusBinary(),
+		prometheusBin(p.version),
 		"--storage.tsdb.path="+p.db.Dir(),
 		"--web.listen-address="+p.addr,
 		"--web.route-prefix="+p.prefix,
